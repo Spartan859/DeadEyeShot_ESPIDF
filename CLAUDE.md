@@ -28,6 +28,11 @@
 - State what you found, where, and the fix. One pass.
 - If cause is unclear: say so. Do not guess.
 
+## Git Discipline
+- Every code change must be committed immediately after editing.
+- If the change is a major algorithm swap or large-scale rewrite, create a new branch first, then commit.
+- For algorithm changes, write the full method description to UPDATES.md in the project root before committing.
+
 ## Build Environment
 - ESP-IDF v5.5.4
 - Activate with: `. ~/.espressif/tools/activate_idf_v5.5.4.sh`
