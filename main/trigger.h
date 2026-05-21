@@ -3,6 +3,6 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 
-#define TRIGGER_GPIO GPIO_NUM_1
+#define TRIGGER_GPIO GPIO_NUM_0
 
 esp_err_t trigger_init(SemaphoreHandle_t trigger_sem);

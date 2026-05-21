@@ -2,7 +2,12 @@
   "permissions": {
     "allow": [
       "Bash(grep -E '\\\\.\\(ino|cpp|h\\)$')",
-      "WebSearch"
+      "WebSearch",
+      "Bash(idf.py build *)"
     ]
+  },
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": true
   }
 }

@@ -1,5 +1,7 @@
 #include "camera_driver.h"
 #include "esp_log.h"
+#include "esp_heap_caps.h"
+#include "esp_system.h"
 #include <string.h>
 
 static const char *TAG = "camera";
@@ -26,6 +28,14 @@ static const char *TAG = "camera";
 
 esp_err_t camera_init(void)
 {
+    bool psram_available = (heap_caps_get_total_size(MALLOC_CAP_SPIRAM) > 0);
+    ESP_LOGI(TAG, "PSRAM %s (%lu bytes)",
+             psram_available ? "detected" : "NOT detected",
+             heap_caps_get_total_size(MALLOC_CAP_SPIRAM));
+    ESP_LOGI(TAG, "Free heap: %lu bytes, free internal: %lu bytes",
+             esp_get_free_heap_size(),
+             heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+
     camera_config_t config = {
         .pin_pwdn     = PWDN_GPIO_NUM,
         .pin_reset    = RESET_GPIO_NUM,
@@ -48,18 +58,37 @@ esp_err_t camera_init(void)
         .ledc_timer   = LEDC_TIMER_0,
         .ledc_channel = LEDC_CHANNEL_0,
 
-        .pixel_format = PIXFORMAT_RGB565,
-        .frame_size   = FRAMESIZE_QVGA,   // 320x240
+        // Use JPEG first to diagnose if camera works at all
+        .pixel_format = PIXFORMAT_JPEG,
+        .frame_size   = FRAMESIZE_QVGA,
         .jpeg_quality = 12,
-        .fb_count     = 2,
-        .fb_location  = CAMERA_FB_IN_PSRAM,
-        .grab_mode    = CAMERA_GRAB_LATEST,
+        .grab_mode    = CAMERA_GRAB_WHEN_EMPTY,
     };
+
+    if (psram_available) {
+        config.fb_count    = 2;
+        config.fb_location = CAMERA_FB_IN_PSRAM;
+        config.grab_mode   = CAMERA_GRAB_LATEST;
+        ESP_LOGI(TAG, "Using PSRAM frame buffers (x2)");
+    } else {
+        config.fb_count    = 1;
+        config.fb_location = CAMERA_FB_IN_DRAM;
+        ESP_LOGI(TAG, "PSRAM not available, using DRAM frame buffer (x1)");
+    }
 
     esp_err_t err = esp_camera_init(&config);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Camera init failed: 0x%x", err);
-        return err;
+        if (psram_available) {
+            ESP_LOGW(TAG, "PSRAM alloc failed, retrying with DRAM");
+            esp_camera_deinit();
+            config.fb_count    = 1;
+            config.fb_location = CAMERA_FB_IN_DRAM;
+            err = esp_camera_init(&config);
+        }
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Camera init failed: 0x%x", err);
+            return err;
+        }
     }
 
     sensor_t *s = esp_camera_sensor_get();
@@ -67,7 +96,20 @@ esp_err_t camera_init(void)
     s->set_brightness(s, 1);
     s->set_saturation(s, 0);
 
-    ESP_LOGI(TAG, "Camera init OK (QVGA RGB565)");
+    ESP_LOGI(TAG, "Camera init OK (QVGA JPEG, %s)",
+             config.fb_location == CAMERA_FB_IN_PSRAM ? "PSRAM" : "DRAM");
+
+    // Test capture to verify camera works
+    ESP_LOGI(TAG, "Test capture...");
+    camera_fb_t *fb = esp_camera_fb_get();
+    if (fb) {
+        ESP_LOGI(TAG, "Test capture OK: %dx%d, %d bytes, format=%d",
+                 fb->width, fb->height, fb->len, fb->format);
+        esp_camera_fb_return(fb);
+    } else {
+        ESP_LOGE(TAG, "Test capture FAILED");
+    }
+
     return ESP_OK;
 }
 

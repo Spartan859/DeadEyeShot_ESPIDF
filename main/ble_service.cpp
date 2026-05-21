@@ -33,7 +33,7 @@ class ServerCallbacks : public BLEServerCallbacks {
 
 class TargetTypeCallbacks : public BLECharacteristicCallbacks {
     void onWrite(BLECharacteristic *pChar) override {
-        std::string val = pChar->getValue();
+        String val = pChar->getValue();
         if (val.length() == 1) {
             s_target_type = (target_type_t)val[0];
             ESP_LOGI(TAG, "Target type set: %s",

@@ -4,7 +4,7 @@
   "idf.openOcdConfigs": [
     "board/esp32s3-builtin.cfg"
   ],
-  "idf.port": "detect",
+  "idf.port": "/dev/tty.usbmodem1101",
   "idf.currentSetup": "/Users/dijkstra0x3/.espressif/v5.5.4/esp-idf",
   "idf.customExtraVars": {
     "OPENOCD_SCRIPTS": "C:\\Users\\qianj\\.espressif\\tools\\openocd-esp32\\v0.12.0-esp32-20230921/openocd-esp32/share/openocd/scripts",
@@ -17,5 +17,6 @@
     "--background-index",
     "--query-driver=**",
     "--compile-commands-dir=/Users/dijkstra0x3/Github/DeadEyeShot_ESPIDF/build"
-  ]
+  ],
+  "idf.flashType": "UART"
 }

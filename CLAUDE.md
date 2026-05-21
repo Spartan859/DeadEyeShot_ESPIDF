@@ -28,6 +28,12 @@
 - State what you found, where, and the fix. One pass.
 - If cause is unclear: say so. Do not guess.
 
+## Build Environment
+- ESP-IDF v5.5.4
+- Activate with: `. ~/.espressif/tools/activate_idf_v5.5.4.sh`
+- Build with: `idf.py build`
+- Flash with: `idf.py -b 115200 flash`
+
 ## Simple Formatting
 - No em dashes, smart quotes, or decorative Unicode symbols.
 - Plain hyphens and straight quotes only.

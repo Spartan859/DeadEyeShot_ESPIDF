@@ -6,8 +6,7 @@
 typedef struct {
     int center_x;
     int center_y;
-    float ring_width_pixels;
-    int num_rings_detected;
+    float black_radius;
     bool found;
 } target_result_t;
 
