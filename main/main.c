@@ -131,9 +131,15 @@ static void proc_task(void *arg)
             continue;
         }
 
-        // Detect target
-        target_result_t target = target_detect(gray, width, height);
+        // Detect target (also outputs binary mask for tuning)
+        uint8_t *mask = (uint8_t *)malloc(width * height);
+        target_result_t target = target_detect(gray, width, height, mask);
         free(gray);
+
+        if (mask) {
+            web_server_update_mask(mask, width, height);
+            free(mask);
+        }
 
         if (!target.found) {
             ESP_LOGW(TAG, "Target not found");

@@ -25,6 +25,15 @@ static struct {
     bool has_shot;
 } s_shot;
 
+// Shared mask data protected by same mutex
+static struct {
+    uint8_t *data;
+    int len;
+    int width;
+    int height;
+    bool has_mask;
+} s_mask;
+
 // HTML page
 static const char HTML_PAGE[] =
 "<!DOCTYPE html><html><head>"
@@ -38,14 +47,21 @@ static const char HTML_PAGE[] =
 ".w{position:relative;display:inline-block;border:2px solid #e94560;"
 "border-radius:8px;margin:10px}"
 ".w img{display:block;border-radius:6px}"
-".w canvas{position:absolute;top:0;left:0;border-radius:6px}"
+".w canvas{display:block;border-radius:6px}"
+".lb{color:#aaa;font-size:0.8em;margin-top:4px}"
 "</style></head><body>"
 "<h1>DeadEyeShot</h1>"
 "<div id='sc' class='s'>---</div>"
 "<br>"
 "<div class='w' id='wrap' style='display:none'>"
 "<img id='pic' src='' width='320' height='240'>"
-"<canvas id='ov' width='320' height='240'></canvas>"
+"<canvas id='ov' width='320' height='240' "
+"style='position:absolute;top:0;left:0;border-radius:6px'></canvas>"
+"</div>"
+"<br>"
+"<div class='w' id='mwrap' style='display:none'>"
+"<canvas id='msk' width='320' height='240'></canvas>"
+"<div class='lb'>Dark Component Mask</div>"
 "</div>"
 "<p id='info'></p>"
 "<script>"
@@ -65,6 +81,26 @@ static const char HTML_PAGE[] =
 "x.arc(sd.ax*sx,sd.ay*sy,4,0,2*Math.PI);"
 "x.fillStyle='#4488ff';x.fill();"
 "}"
+"function lm(){"
+"var r=new XMLHttpRequest();"
+"r.responseType='arraybuffer';"
+"r.onload=function(){"
+"if(r.status!=200)return;"
+"var d=new Uint8Array(r.response);"
+"var c=document.getElementById('msk');"
+"var ctx=c.getContext('2d');"
+"var img=ctx.createImageData(c.width,c.height);"
+"for(var i=0;i<d.length;i++){"
+"img.data[i*4]=0;"
+"img.data[i*4+1]=d[i];"
+"img.data[i*4+2]=0;"
+"img.data[i*4+3]=255;"
+"}"
+"ctx.putImageData(img,0,0);"
+"document.getElementById('mwrap').style.display='inline-block';"
+"};"
+"r.open('GET','/mask.bin');r.send();"
+"}"
 "function u(){"
 "var r=new XMLHttpRequest();"
 "r.onload=function(){"
@@ -77,6 +113,7 @@ static const char HTML_PAGE[] =
 "document.getElementById('pic').onload=draw;"
 "document.getElementById('info').textContent="
 "'Target:('+d.cx+','+d.cy+') Aim:('+d.ax+','+d.ay+')';"
+"lm();"
 "}};"
 "r.open('GET','/api/shot');r.send();"
 "}"
@@ -126,13 +163,28 @@ static esp_err_t api_shot_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+static esp_err_t mask_handler(httpd_req_t *req)
+{
+    xSemaphoreTake(s_shot_mutex, portMAX_DELAY);
+    if (!s_mask.has_mask || !s_mask.data) {
+        xSemaphoreGive(s_shot_mutex);
+        httpd_resp_send_404(req);
+        return ESP_OK;
+    }
+    httpd_resp_set_type(req, "application/octet-stream");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
+    esp_err_t err = httpd_resp_send(req, (const char *)s_mask.data, s_mask.len);
+    xSemaphoreGive(s_shot_mutex);
+    return err;
+}
+
 esp_err_t web_server_init(void)
 {
     s_shot_mutex = xSemaphoreCreateMutex();
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = WEB_SERVER_PORT;
-    config.max_uri_handlers = 4;
+    config.max_uri_handlers = 5;
 
     if (httpd_start(&s_server, &config) != ESP_OK) {
         ESP_LOGE(TAG, "Failed to start web server");
@@ -142,10 +194,12 @@ esp_err_t web_server_init(void)
     httpd_uri_t root_uri = { .uri = "/", .method = HTTP_GET, .handler = root_handler };
     httpd_uri_t jpg_uri  = { .uri = "/shot.jpg", .method = HTTP_GET, .handler = shot_jpg_handler };
     httpd_uri_t api_uri  = { .uri = "/api/shot", .method = HTTP_GET, .handler = api_shot_handler };
+    httpd_uri_t mask_uri = { .uri = "/mask.bin", .method = HTTP_GET, .handler = mask_handler };
 
     httpd_register_uri_handler(s_server, &root_uri);
     httpd_register_uri_handler(s_server, &jpg_uri);
     httpd_register_uri_handler(s_server, &api_uri);
+    httpd_register_uri_handler(s_server, &mask_uri);
 
     ESP_LOGI(TAG, "Web server started on port %d", WEB_SERVER_PORT);
     return ESP_OK;
@@ -183,6 +237,29 @@ void web_server_update_shot(const uint8_t *jpeg_data, int jpeg_len,
     s_shot.aim_x = aim_x;
     s_shot.aim_y = aim_y;
     s_shot.has_shot = true;
+
+    xSemaphoreGive(s_shot_mutex);
+}
+
+void web_server_update_mask(const uint8_t *mask, int width, int height)
+{
+    int len = width * height;
+
+    xSemaphoreTake(s_shot_mutex, portMAX_DELAY);
+
+    if (s_mask.data) {
+        free(s_mask.data);
+        s_mask.data = NULL;
+    }
+
+    s_mask.data = (uint8_t *)malloc(len);
+    if (s_mask.data) {
+        memcpy(s_mask.data, mask, len);
+        s_mask.len = len;
+        s_mask.width = width;
+        s_mask.height = height;
+        s_mask.has_mask = true;
+    }
 
     xSemaphoreGive(s_shot_mutex);
 }
