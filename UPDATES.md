@@ -61,3 +61,34 @@
 
 ### 变更文件
 - `main/target_detector.c` - 重构为阈值搜索循环
+
+---
+
+## 2026-06-18: 板端只上传图片，检测迁移到手机端 (分支: codex/image-upload-only-phone-detect)
+
+### 背景
+ESP32-S3 板端内存和算力有限，后续计划由手机上位机使用 uni-app x + zj-opencv 执行靶心检测。
+
+### 改动
+1. **板端不再执行 target detect**：
+   - 触发后只取最新 JPEG 帧并缓存到 Web 服务。
+   - 移除灰度转换、连通域检测、mask 生成和分数计算流程。
+
+2. **HTTP 接口精简**：
+   - 保留 `/shot.jpg`，用于手机端拉取最新 JPEG。
+   - `/api/shot` 仅返回图片状态和元信息：`has_shot`、`w`、`h`、`jpeg_len`。
+   - 移除 `/mask.bin` 调试端点和网页上的检测标注。
+
+3. **BLE 只保留状态通知**：
+   - 触发后发送 `0x01`。
+   - 图片缓存成功发送 `0x02`。
+   - 无帧或缓存失败发送 `0xFF`。
+   - 不再发送板端分数。
+
+### 变更文件
+- `main/main.c` - 简化触发处理为 JPEG 缓存和状态通知
+- `main/web_server.c` - 精简页面、JSON 和端点
+- `main/web_server.h` - 简化 `web_server_update_shot()` 参数
+- `main/ble_service.h` - 移除评分和靶型接口
+- `main/ble_service.cpp` - 只保留状态 characteristic
+- `main/CMakeLists.txt` - 不再编译 `target_detector.c` 和 `scorer.c`

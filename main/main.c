@@ -7,11 +7,8 @@
 #include "esp_timer.h"
 #include "nvs_flash.h"
 
-#include "img_converters.h"
 #include "camera_driver.h"
 #include "trigger.h"
-#include "target_detector.h"
-#include "scorer.h"
 #include "ble_service.h"
 #include "wifi_station.h"
 #include "web_server.h"
@@ -25,18 +22,6 @@ static const char *TAG = "main";
 static SemaphoreHandle_t s_trigger_sem;
 static camera_fb_t *s_latest_fb = NULL;
 static SemaphoreHandle_t s_frame_mutex;
-
-// RGB565 to grayscale conversion
-static void rgb565_to_gray(const uint8_t *rgb565, uint8_t *gray, int num_pixels)
-{
-    for (int i = 0; i < num_pixels; i++) {
-        uint16_t pixel = rgb565[i * 2] | (rgb565[i * 2 + 1] << 8);
-        uint8_t r = (pixel >> 11) & 0x1F;
-        uint8_t g = (pixel >> 5) & 0x3F;
-        uint8_t b = pixel & 0x1F;
-        gray[i] = (uint8_t)((r * 77 + g * 150 + b * 29) >> 8);
-    }
-}
 
 // Camera task: continuously capture frames, keep the latest one
 static void camera_task(void *arg)
@@ -61,7 +46,7 @@ static void camera_task(void *arg)
     }
 }
 
-// Processing task: wait for trigger, process frame, calculate score
+// Processing task: wait for trigger and publish the latest JPEG frame
 static void proc_task(void *arg)
 {
     ESP_LOGI(TAG, "Processing task started");
@@ -87,97 +72,34 @@ static void proc_task(void *arg)
 
         int width = fb->width;
         int height = fb->height;
-
-        // Save raw JPEG data for web display before processing
-        uint8_t *jpeg_copy = NULL;
         int jpeg_len = fb->len;
+
+        uint8_t *jpeg_copy = NULL;
         if (fb->format == PIXFORMAT_JPEG && fb->len > 0) {
             jpeg_copy = (uint8_t *)malloc(fb->len);
             if (jpeg_copy) {
                 memcpy(jpeg_copy, fb->buf, fb->len);
             }
-        }
-
-        // Convert to grayscale for processing
-        uint8_t *gray = NULL;
-        if (fb->format == PIXFORMAT_RGB565) {
-            gray = (uint8_t *)malloc(width * height);
-            if (gray) {
-                rgb565_to_gray(fb->buf, gray, width * height);
-            }
-        } else if (fb->format == PIXFORMAT_JPEG) {
-            // JPEG → RGB888 → grayscale
-            int rgb_size = width * height * 3;
-            uint8_t *rgb = (uint8_t *)malloc(rgb_size);
-            if (rgb && fmt2rgb888(fb->buf, fb->len, PIXFORMAT_JPEG, rgb)) {
-                gray = (uint8_t *)malloc(width * height);
-                if (gray) {
-                    for (int i = 0; i < width * height; i++) {
-                        gray[i] = (uint8_t)((rgb[i*3]*77 + rgb[i*3+1]*150 + rgb[i*3+2]*29) >> 8);
-                    }
-                }
-            } else {
-                ESP_LOGE(TAG, "JPEG decode failed");
-            }
-            free(rgb);
+        } else {
+            ESP_LOGE(TAG, "Frame is not JPEG: format=%d len=%d", fb->format, fb->len);
         }
 
         camera_return_fb(fb);
 
-        if (!gray) {
-            ESP_LOGE(TAG, "No grayscale data for processing");
-            free(jpeg_copy);
+        if (!jpeg_copy) {
+            ESP_LOGE(TAG, "No JPEG data for upload");
             ble_notify_status(0xFF);
             continue;
         }
-
-        // Detect target (also outputs binary mask for tuning)
-        uint8_t *mask = (uint8_t *)malloc(width * height);
-        target_result_t target = target_detect(gray, width, height, mask);
-        free(gray);
-
-        if (mask) {
-            web_server_update_mask(mask, width, height);
-            free(mask);
-        }
-
-        if (!target.found) {
-            ESP_LOGW(TAG, "Target not found");
-            // Still update web with the image even if target not found
-            if (jpeg_copy) {
-                web_server_update_shot(jpeg_copy, jpeg_len, width, height,
-                                       0.0f, 0, 0, 0.0f, width / 2, height / 2);
-                free(jpeg_copy);
-            }
-            ble_notify_status(0xFF);
-            continue;
-        }
-
-        // Calculate score
-        target_type_t type = ble_get_target_type();
-        score_result_t result = score_calculate(&target, width / 2, height / 2, type);
 
         int64_t t_end = esp_timer_get_time();
         float elapsed_ms = (t_end - t_start) / 1000.0f;
 
-        const char *type_str = (type == TARGET_TYPE_PISTOL) ? "Pistol" : "Rifle";
-        ESP_LOGI(TAG, "[%s] Score: %.1f | Target center: (%d, %d) | Aim: (%d, %d) | %.1f ms",
-                 type_str, result.score,
-                 target.center_x, target.center_y,
-                 width / 2, height / 2,
-                 elapsed_ms);
+        web_server_update_shot(jpeg_copy, jpeg_len, width, height);
+        ESP_LOGI(TAG, "Shot captured: %dx%d, %d bytes, %.1f ms",
+                 width, height, jpeg_len, elapsed_ms);
+        free(jpeg_copy);
 
-        // Update web page with shot image and score
-        if (jpeg_copy) {
-            web_server_update_shot(jpeg_copy, jpeg_len, width, height,
-                                   result.score,
-                                   target.center_x, target.center_y,
-                                   target.black_radius,
-                                   width / 2, height / 2);
-            free(jpeg_copy);
-        }
-
-        ble_notify_score(result.score);
         ble_notify_status(0x02);
     }
 }
