@@ -11,3 +11,4 @@ void web_server_update_shot(const uint8_t *jpeg_data, int jpeg_len,
                             int target_cx, int target_cy,
                             float black_radius,
                             int aim_x, int aim_y);
+void web_server_update_mask(const uint8_t *mask, int width, int height);
