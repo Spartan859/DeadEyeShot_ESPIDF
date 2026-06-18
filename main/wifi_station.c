@@ -7,8 +7,8 @@
 
 static const char *TAG = "wifi";
 
-#define WIFI_SSID "hoshizora_mi15"
-#define WIFI_PASS "12345678"
+#define WIFI_SSID "StudentTsinghua"
+#define WIFI_PASS "86D@hNhV"
 
 static bool s_connected = false;
 
