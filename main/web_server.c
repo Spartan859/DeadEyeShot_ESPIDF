@@ -60,8 +60,16 @@ static const char HTML_PAGE[] =
 "setInterval(u,2000);u();"
 "</script></body></html>";
 
+static void set_cors_headers(httpd_req_t *req)
+{
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET, OPTIONS");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "Content-Type");
+}
+
 static esp_err_t root_handler(httpd_req_t *req)
 {
+    set_cors_headers(req);
     httpd_resp_set_type(req, "text/html");
     httpd_resp_send(req, HTML_PAGE, strlen(HTML_PAGE));
     return ESP_OK;
@@ -76,6 +84,7 @@ static esp_err_t shot_jpg_handler(httpd_req_t *req)
         return ESP_OK;
     }
     httpd_resp_set_type(req, "image/jpeg");
+    set_cors_headers(req);
     httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
     esp_err_t err = httpd_resp_send(req, (const char *)s_shot.jpeg, s_shot.jpeg_len);
     xSemaphoreGive(s_shot_mutex);
@@ -96,6 +105,7 @@ static esp_err_t api_shot_handler(httpd_req_t *req)
     xSemaphoreGive(s_shot_mutex);
 
     httpd_resp_set_type(req, "application/json");
+    set_cors_headers(req);
     httpd_resp_send(req, json, strlen(json));
     return ESP_OK;
 }
