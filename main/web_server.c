@@ -424,7 +424,7 @@ esp_err_t web_server_init(void)
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = WEB_SERVER_PORT;
     config.max_uri_handlers = 7;
-    config.max_open_sockets = 8;
+    config.max_open_sockets = 7;
     config.uri_match_fn = httpd_uri_match_wildcard;
 
     if (httpd_start(&s_server, &config) != ESP_OK) {
