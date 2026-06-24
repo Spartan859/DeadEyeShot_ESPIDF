@@ -60,7 +60,7 @@ esp_err_t camera_init(void)
 
         // Use JPEG first to diagnose if camera works at all
         .pixel_format = PIXFORMAT_JPEG,
-        .frame_size   = FRAMESIZE_QVGA,
+        .frame_size   = FRAMESIZE_QQVGA,
         .jpeg_quality = 24,
         .grab_mode    = CAMERA_GRAB_WHEN_EMPTY,
     };
@@ -101,7 +101,7 @@ esp_err_t camera_init(void)
     s->set_aec_value(s, 300);
     s->set_agc_gain(s, 8);
 
-    ESP_LOGI(TAG, "Camera init OK (QVGA JPEG, %s)",
+    ESP_LOGI(TAG, "Camera init OK (QQVGA JPEG, %s)",
              config.fb_location == CAMERA_FB_IN_PSRAM ? "PSRAM" : "DRAM");
 
     // Test capture to verify camera works
