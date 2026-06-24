@@ -66,10 +66,10 @@ esp_err_t camera_init(void)
     };
 
     if (psram_available) {
-        config.fb_count    = 3;
+        config.fb_count    = 4;
         config.fb_location = CAMERA_FB_IN_PSRAM;
         config.grab_mode   = CAMERA_GRAB_LATEST;
-        ESP_LOGI(TAG, "Using PSRAM frame buffers (x3)");
+        ESP_LOGI(TAG, "Using PSRAM frame buffers (x4)");
     } else {
         config.fb_count    = 1;
         config.fb_location = CAMERA_FB_IN_DRAM;
