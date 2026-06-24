@@ -23,6 +23,52 @@ static SemaphoreHandle_t s_trigger_sem;
 static camera_fb_t *s_latest_fb = NULL;
 static SemaphoreHandle_t s_frame_mutex;
 
+#if CONFIG_DEADEYE_CAMERA_FPS_TEST
+static void camera_fps_test(void)
+{
+    ESP_LOGI(TAG, "Camera FPS test mode");
+
+    uint32_t frame_count = 0;
+    int64_t log_start = esp_timer_get_time();
+    int64_t capture_total_us = 0;
+    int64_t capture_max_us = 0;
+
+    while (1) {
+        int64_t capture_start = esp_timer_get_time();
+        camera_fb_t *fb = camera_capture();
+        int64_t capture_us = esp_timer_get_time() - capture_start;
+
+        if (!fb) {
+            ESP_LOGW(TAG, "Camera FPS test capture failed");
+            vTaskDelay(pdMS_TO_TICKS(500));
+            continue;
+        }
+
+        frame_count++;
+        capture_total_us += capture_us;
+        if (capture_us > capture_max_us) {
+            capture_max_us = capture_us;
+        }
+
+        camera_return_fb(fb);
+
+        int64_t now = esp_timer_get_time();
+        if (now - log_start >= 5000000 && frame_count > 0) {
+            float elapsed_s = (now - log_start) / 1000000.0f;
+            ESP_LOGI(TAG,
+                     "Camera FPS test %.1f fps, capture avg/max %.1f/%.1f ms",
+                     frame_count / elapsed_s,
+                     capture_total_us / (float)frame_count / 1000.0f,
+                     capture_max_us / 1000.0f);
+            frame_count = 0;
+            log_start = now;
+            capture_total_us = 0;
+            capture_max_us = 0;
+        }
+    }
+}
+#endif
+
 // Camera task: continuously capture frames, keep the latest one
 static void camera_task(void *arg)
 {
@@ -147,6 +193,21 @@ static void proc_task(void *arg)
 void app_main(void)
 {
     ESP_LOGI(TAG, "DeadEyeShot starting...");
+
+#if CONFIG_DEADEYE_CAMERA_FPS_TEST
+    {
+        esp_err_t ret = nvs_flash_init();
+        if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+            ESP_ERROR_CHECK(nvs_flash_erase());
+            ret = nvs_flash_init();
+        }
+        ESP_ERROR_CHECK(ret);
+    }
+
+    ESP_ERROR_CHECK(camera_init());
+    camera_fps_test();
+    return;
+#endif
 
     s_trigger_sem = xSemaphoreCreateBinary();
     s_frame_mutex = xSemaphoreCreateMutex();
