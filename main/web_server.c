@@ -3,6 +3,8 @@
 #include "esp_http_server.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "freertos/task.h"
+#include "esp_timer.h"
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,9 +13,17 @@
 static const char *TAG = "web";
 
 #define SHOT_QUEUE_CAPACITY 8
+#define VIDEO_HEADER_LEN 21
+#define VIDEO_TASK_STACK_SIZE 4096
+#define VIDEO_TASK_DELAY_MS 5
 
 static httpd_handle_t s_server = NULL;
 static SemaphoreHandle_t s_shot_mutex = NULL;
+static SemaphoreHandle_t s_video_mutex = NULL;
+static TaskHandle_t s_video_task = NULL;
+static int s_video_fd = -1;
+static uint32_t s_next_video_frame_id = 1;
+static uint32_t s_last_sent_video_frame_id = 0;
 
 typedef struct {
     uint32_t id;
@@ -23,11 +33,21 @@ typedef struct {
     int height;
 } shot_entry_t;
 
+typedef struct {
+    uint32_t id;
+    uint32_t timestamp_ms;
+    uint8_t *jpeg;
+    int jpeg_len;
+    int width;
+    int height;
+} video_frame_t;
+
 // Shared shot data protected by mutex
 static shot_entry_t s_shots[SHOT_QUEUE_CAPACITY];
 static int s_shot_start = 0;
 static int s_shot_count = 0;
 static uint32_t s_next_shot_id = 1;
+static video_frame_t s_video_frame;
 
 // HTML page
 static const char HTML_PAGE[] =
@@ -84,6 +104,20 @@ static void free_shot_entry(shot_entry_t *entry)
     memset(entry, 0, sizeof(*entry));
 }
 
+static void put_u16_le(uint8_t *dst, uint16_t value)
+{
+    dst[0] = (uint8_t)(value & 0xff);
+    dst[1] = (uint8_t)((value >> 8) & 0xff);
+}
+
+static void put_u32_le(uint8_t *dst, uint32_t value)
+{
+    dst[0] = (uint8_t)(value & 0xff);
+    dst[1] = (uint8_t)((value >> 8) & 0xff);
+    dst[2] = (uint8_t)((value >> 16) & 0xff);
+    dst[3] = (uint8_t)((value >> 24) & 0xff);
+}
+
 static shot_entry_t *get_latest_shot(void)
 {
     if (s_shot_count <= 0) {
@@ -118,11 +152,139 @@ static uint32_t get_latest_id(void)
     return latest ? latest->id : 0;
 }
 
+static void close_video_client(void)
+{
+    if (s_server && s_video_fd >= 0) {
+        ESP_LOGI(TAG, "Closing video websocket fd=%d", s_video_fd);
+        httpd_sess_trigger_close(s_server, s_video_fd);
+    }
+    s_video_fd = -1;
+    s_last_sent_video_frame_id = 0;
+}
+
+static bool copy_video_frame(video_frame_t *copy)
+{
+    bool ok = false;
+    memset(copy, 0, sizeof(*copy));
+
+    xSemaphoreTake(s_video_mutex, portMAX_DELAY);
+    if (s_video_frame.jpeg && s_video_frame.jpeg_len > 0) {
+        copy->jpeg = (uint8_t *)malloc(s_video_frame.jpeg_len);
+        if (copy->jpeg) {
+            memcpy(copy->jpeg, s_video_frame.jpeg, s_video_frame.jpeg_len);
+            copy->id = s_video_frame.id;
+            copy->timestamp_ms = s_video_frame.timestamp_ms;
+            copy->jpeg_len = s_video_frame.jpeg_len;
+            copy->width = s_video_frame.width;
+            copy->height = s_video_frame.height;
+            ok = true;
+        }
+    }
+    xSemaphoreGive(s_video_mutex);
+
+    return ok;
+}
+
+static void video_task(void *arg)
+{
+    uint32_t sent_count = 0;
+    int64_t log_start = esp_timer_get_time();
+
+    while (1) {
+        if (!s_server || s_video_fd < 0) {
+            vTaskDelay(pdMS_TO_TICKS(50));
+            continue;
+        }
+
+        video_frame_t frame;
+        if (!copy_video_frame(&frame)) {
+            vTaskDelay(pdMS_TO_TICKS(20));
+            continue;
+        }
+
+        if (frame.id == s_last_sent_video_frame_id) {
+            free(frame.jpeg);
+            vTaskDelay(pdMS_TO_TICKS(VIDEO_TASK_DELAY_MS));
+            continue;
+        }
+
+        size_t packet_len = VIDEO_HEADER_LEN + frame.jpeg_len;
+        uint8_t *packet = (uint8_t *)malloc(packet_len);
+        if (!packet) {
+            ESP_LOGE(TAG, "Failed to allocate video packet (%u bytes)", (unsigned)packet_len);
+            free(frame.jpeg);
+            vTaskDelay(pdMS_TO_TICKS(50));
+            continue;
+        }
+
+        packet[0] = 'D';
+        packet[1] = 'E';
+        packet[2] = 'S';
+        packet[3] = '1';
+        packet[4] = 1;
+        put_u32_le(packet + 5, frame.id);
+        put_u16_le(packet + 9, (uint16_t)frame.width);
+        put_u16_le(packet + 11, (uint16_t)frame.height);
+        put_u32_le(packet + 13, (uint32_t)frame.jpeg_len);
+        put_u32_le(packet + 17, frame.timestamp_ms);
+        memcpy(packet + VIDEO_HEADER_LEN, frame.jpeg, frame.jpeg_len);
+
+        httpd_ws_frame_t ws_frame;
+        memset(&ws_frame, 0, sizeof(ws_frame));
+        ws_frame.type = HTTPD_WS_TYPE_BINARY;
+        ws_frame.payload = packet;
+        ws_frame.len = packet_len;
+
+        esp_err_t err = httpd_ws_send_frame_async(s_server, s_video_fd, &ws_frame);
+        free(packet);
+        free(frame.jpeg);
+
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "Video websocket send failed: 0x%x", err);
+            close_video_client();
+            vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
+        }
+
+        s_last_sent_video_frame_id = frame.id;
+        sent_count++;
+        int64_t now = esp_timer_get_time();
+        if (now - log_start >= 5000000) {
+            float fps = sent_count * 1000000.0f / (now - log_start);
+            ESP_LOGI(TAG, "Video websocket %.1f fps", fps);
+            sent_count = 0;
+            log_start = now;
+        }
+    }
+}
+
 static esp_err_t root_handler(httpd_req_t *req)
 {
     set_cors_headers(req);
     httpd_resp_set_type(req, "text/html");
     httpd_resp_send(req, HTML_PAGE, strlen(HTML_PAGE));
+    return ESP_OK;
+}
+
+static esp_err_t video_ws_handler(httpd_req_t *req)
+{
+    if (req->method == HTTP_GET) {
+        int fd = httpd_req_to_sockfd(req);
+        if (s_video_fd >= 0 && s_video_fd != fd) {
+            close_video_client();
+        }
+        s_video_fd = fd;
+        s_last_sent_video_frame_id = 0;
+        ESP_LOGI(TAG, "Video websocket connected fd=%d", fd);
+        return ESP_OK;
+    }
+
+    httpd_ws_frame_t ws_pkt;
+    memset(&ws_pkt, 0, sizeof(ws_pkt));
+    esp_err_t err = httpd_ws_recv_frame(req, &ws_pkt, 0);
+    if (err != ESP_OK || ws_pkt.type == HTTPD_WS_TYPE_CLOSE) {
+        close_video_client();
+    }
     return ESP_OK;
 }
 
@@ -249,10 +411,12 @@ static esp_err_t api_shot_events_handler(httpd_req_t *req)
 esp_err_t web_server_init(void)
 {
     s_shot_mutex = xSemaphoreCreateMutex();
+    s_video_mutex = xSemaphoreCreateMutex();
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = WEB_SERVER_PORT;
-    config.max_uri_handlers = 5;
+    config.max_uri_handlers = 6;
+    config.max_open_sockets = 8;
     config.uri_match_fn = httpd_uri_match_wildcard;
 
     if (httpd_start(&s_server, &config) != ESP_OK) {
@@ -263,14 +427,19 @@ esp_err_t web_server_init(void)
     httpd_uri_t root_uri = { .uri = "/", .method = HTTP_GET, .handler = root_handler };
     httpd_uri_t jpg_uri  = { .uri = "/shot.jpg", .method = HTTP_GET, .handler = shot_jpg_handler };
     httpd_uri_t id_jpg_uri  = { .uri = "/shot/*", .method = HTTP_GET, .handler = shot_id_jpg_handler };
+    httpd_uri_t video_uri = { .uri = "/ws/video", .method = HTTP_GET, .handler = video_ws_handler, .is_websocket = true };
     httpd_uri_t events_uri  = { .uri = "/api/shot/events", .method = HTTP_GET, .handler = api_shot_events_handler };
     httpd_uri_t api_uri  = { .uri = "/api/shot", .method = HTTP_GET, .handler = api_shot_handler };
 
     httpd_register_uri_handler(s_server, &root_uri);
     httpd_register_uri_handler(s_server, &jpg_uri);
     httpd_register_uri_handler(s_server, &id_jpg_uri);
+    httpd_register_uri_handler(s_server, &video_uri);
     httpd_register_uri_handler(s_server, &events_uri);
     httpd_register_uri_handler(s_server, &api_uri);
+
+    xTaskCreatePinnedToCore(video_task, "video_ws", VIDEO_TASK_STACK_SIZE,
+                            NULL, 3, &s_video_task, 1);
 
     ESP_LOGI(TAG, "Web server started on port %d", WEB_SERVER_PORT);
     return ESP_OK;
@@ -313,4 +482,31 @@ void web_server_update_shot(const uint8_t *jpeg_data, int jpeg_len,
     }
 
     xSemaphoreGive(s_shot_mutex);
+}
+
+void web_server_update_video_frame(const uint8_t *jpeg_data, int jpeg_len,
+                                   int width, int height)
+{
+    if (!jpeg_data || jpeg_len <= 0 || !s_video_mutex) {
+        return;
+    }
+
+    uint8_t *copy = (uint8_t *)malloc(jpeg_len);
+    if (!copy) {
+        ESP_LOGW(TAG, "Failed to allocate video frame (%d bytes)", jpeg_len);
+        return;
+    }
+    memcpy(copy, jpeg_data, jpeg_len);
+
+    xSemaphoreTake(s_video_mutex, portMAX_DELAY);
+    if (s_video_frame.jpeg) {
+        free(s_video_frame.jpeg);
+    }
+    s_video_frame.jpeg = copy;
+    s_video_frame.jpeg_len = jpeg_len;
+    s_video_frame.width = width;
+    s_video_frame.height = height;
+    s_video_frame.timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    s_video_frame.id = s_next_video_frame_id++;
+    xSemaphoreGive(s_video_mutex);
 }

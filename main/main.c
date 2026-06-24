@@ -32,6 +32,9 @@ static void camera_task(void *arg)
     while (1) {
         camera_fb_t *fb = camera_capture();
         if (fb) {
+            if (fb->format == PIXFORMAT_JPEG && fb->len > 0) {
+                web_server_update_video_frame(fb->buf, fb->len, fb->width, fb->height);
+            }
             xSemaphoreTake(s_frame_mutex, portMAX_DELAY);
             if (s_latest_fb) {
                 camera_return_fb(s_latest_fb);
