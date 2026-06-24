@@ -93,7 +93,8 @@ static void set_cors_headers(httpd_req_t *req)
 {
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET, OPTIONS");
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "Content-Type");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "Content-Type, Access-Control-Request-Private-Network");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Private-Network", "true");
 }
 
 static void free_shot_entry(shot_entry_t *entry)
@@ -266,6 +267,13 @@ static esp_err_t root_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+static esp_err_t options_handler(httpd_req_t *req)
+{
+    set_cors_headers(req);
+    httpd_resp_send(req, NULL, 0);
+    return ESP_OK;
+}
+
 static esp_err_t video_ws_handler(httpd_req_t *req)
 {
     if (req->method == HTTP_GET) {
@@ -415,7 +423,7 @@ esp_err_t web_server_init(void)
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = WEB_SERVER_PORT;
-    config.max_uri_handlers = 6;
+    config.max_uri_handlers = 7;
     config.max_open_sockets = 8;
     config.uri_match_fn = httpd_uri_match_wildcard;
 
@@ -430,7 +438,9 @@ esp_err_t web_server_init(void)
     httpd_uri_t video_uri = { .uri = "/ws/video", .method = HTTP_GET, .handler = video_ws_handler, .is_websocket = true };
     httpd_uri_t events_uri  = { .uri = "/api/shot/events", .method = HTTP_GET, .handler = api_shot_events_handler };
     httpd_uri_t api_uri  = { .uri = "/api/shot", .method = HTTP_GET, .handler = api_shot_handler };
+    httpd_uri_t options_uri = { .uri = "/*", .method = HTTP_OPTIONS, .handler = options_handler };
 
+    httpd_register_uri_handler(s_server, &options_uri);
     httpd_register_uri_handler(s_server, &root_uri);
     httpd_register_uri_handler(s_server, &jpg_uri);
     httpd_register_uri_handler(s_server, &id_jpg_uri);
