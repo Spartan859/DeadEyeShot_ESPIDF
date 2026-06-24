@@ -54,14 +54,14 @@ esp_err_t camera_init(void)
         .pin_href     = HREF_GPIO_NUM,
         .pin_pclk     = PCLK_GPIO_NUM,
 
-        .xclk_freq_hz = 24000000,
+        .xclk_freq_hz = 26000000,
         .ledc_timer   = LEDC_TIMER_0,
         .ledc_channel = LEDC_CHANNEL_0,
 
         // Use JPEG first to diagnose if camera works at all
         .pixel_format = PIXFORMAT_JPEG,
-        .frame_size   = FRAMESIZE_QQVGA,
-        .jpeg_quality = 24,
+        .frame_size   = FRAMESIZE_QVGA,
+        .jpeg_quality = 12,
         .grab_mode    = CAMERA_GRAB_WHEN_EMPTY,
     };
 
@@ -101,7 +101,7 @@ esp_err_t camera_init(void)
     s->set_aec_value(s, 300);
     s->set_agc_gain(s, 8);
 
-    ESP_LOGI(TAG, "Camera init OK (QQVGA JPEG, %s)",
+    ESP_LOGI(TAG, "Camera init OK (QVGA JPEG, %s)",
              config.fb_location == CAMERA_FB_IN_PSRAM ? "PSRAM" : "DRAM");
 
     // Test capture to verify camera works
