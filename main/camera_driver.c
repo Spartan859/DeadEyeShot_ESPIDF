@@ -61,7 +61,7 @@ esp_err_t camera_init(void)
         // Use JPEG first to diagnose if camera works at all
         .pixel_format = PIXFORMAT_JPEG,
         .frame_size   = FRAMESIZE_QVGA,
-        .jpeg_quality = 12,
+        .jpeg_quality = 24,
         .grab_mode    = CAMERA_GRAB_WHEN_EMPTY,
     };
 
