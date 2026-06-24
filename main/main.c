@@ -29,11 +29,26 @@ static void camera_task(void *arg)
     ESP_LOGI(TAG, "Camera task started, waiting for sensor to stabilize...");
     vTaskDelay(pdMS_TO_TICKS(1000));
 
+    uint32_t frame_count = 0;
+    int64_t log_start = esp_timer_get_time();
+    int64_t capture_total_us = 0;
+    int64_t capture_max_us = 0;
+    int64_t video_total_us = 0;
+    int64_t video_max_us = 0;
+
     while (1) {
+        int64_t capture_start = esp_timer_get_time();
         camera_fb_t *fb = camera_capture();
+        int64_t capture_us = esp_timer_get_time() - capture_start;
         if (fb) {
             if (fb->format == PIXFORMAT_JPEG && fb->len > 0) {
+                int64_t video_start = esp_timer_get_time();
                 web_server_update_video_frame(fb->buf, fb->len, fb->width, fb->height);
+                int64_t video_us = esp_timer_get_time() - video_start;
+                video_total_us += video_us;
+                if (video_us > video_max_us) {
+                    video_max_us = video_us;
+                }
             }
             xSemaphoreTake(s_frame_mutex, portMAX_DELAY);
             if (s_latest_fb) {
@@ -41,9 +56,31 @@ static void camera_task(void *arg)
             }
             s_latest_fb = fb;
             xSemaphoreGive(s_frame_mutex);
+            frame_count++;
+            capture_total_us += capture_us;
+            if (capture_us > capture_max_us) {
+                capture_max_us = capture_us;
+            }
         } else {
             vTaskDelay(pdMS_TO_TICKS(500));
             continue;
+        }
+        int64_t now = esp_timer_get_time();
+        if (now - log_start >= 5000000 && frame_count > 0) {
+            float elapsed_s = (now - log_start) / 1000000.0f;
+            ESP_LOGI(TAG,
+                     "Camera %.1f fps, capture avg/max %.1f/%.1f ms, video copy avg/max %.1f/%.1f ms",
+                     frame_count / elapsed_s,
+                     capture_total_us / (float)frame_count / 1000.0f,
+                     capture_max_us / 1000.0f,
+                     video_total_us / (float)frame_count / 1000.0f,
+                     video_max_us / 1000.0f);
+            frame_count = 0;
+            log_start = now;
+            capture_total_us = 0;
+            capture_max_us = 0;
+            video_total_us = 0;
+            video_max_us = 0;
         }
         taskYIELD();
     }
