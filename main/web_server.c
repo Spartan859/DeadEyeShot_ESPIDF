@@ -262,7 +262,7 @@ esp_err_t web_server_init(void)
 
     httpd_uri_t root_uri = { .uri = "/", .method = HTTP_GET, .handler = root_handler };
     httpd_uri_t jpg_uri  = { .uri = "/shot.jpg", .method = HTTP_GET, .handler = shot_jpg_handler };
-    httpd_uri_t id_jpg_uri  = { .uri = "/shot/*.jpg", .method = HTTP_GET, .handler = shot_id_jpg_handler };
+    httpd_uri_t id_jpg_uri  = { .uri = "/shot/*", .method = HTTP_GET, .handler = shot_id_jpg_handler };
     httpd_uri_t events_uri  = { .uri = "/api/shot/events", .method = HTTP_GET, .handler = api_shot_events_handler };
     httpd_uri_t api_uri  = { .uri = "/api/shot", .method = HTTP_GET, .handler = api_shot_handler };
 
