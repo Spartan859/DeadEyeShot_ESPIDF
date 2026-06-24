@@ -45,7 +45,7 @@ static void camera_task(void *arg)
             vTaskDelay(pdMS_TO_TICKS(500));
             continue;
         }
-        vTaskDelay(pdMS_TO_TICKS(30));
+        taskYIELD();
     }
 }
 
