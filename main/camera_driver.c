@@ -54,7 +54,7 @@ esp_err_t camera_init(void)
         .pin_href     = HREF_GPIO_NUM,
         .pin_pclk     = PCLK_GPIO_NUM,
 
-        .xclk_freq_hz = 20000000,
+        .xclk_freq_hz = 24000000,
         .ledc_timer   = LEDC_TIMER_0,
         .ledc_channel = LEDC_CHANNEL_0,
 
@@ -66,10 +66,10 @@ esp_err_t camera_init(void)
     };
 
     if (psram_available) {
-        config.fb_count    = 4;
+        config.fb_count    = 3;
         config.fb_location = CAMERA_FB_IN_PSRAM;
         config.grab_mode   = CAMERA_GRAB_LATEST;
-        ESP_LOGI(TAG, "Using PSRAM frame buffers (x4)");
+        ESP_LOGI(TAG, "Using PSRAM frame buffers (x3)");
     } else {
         config.fb_count    = 1;
         config.fb_location = CAMERA_FB_IN_DRAM;
