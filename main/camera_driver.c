@@ -60,7 +60,7 @@ esp_err_t camera_init(void)
 
         // Use JPEG first to diagnose if camera works at all
         .pixel_format = PIXFORMAT_JPEG,
-        .frame_size   = FRAMESIZE_QVGA,
+        .frame_size   = FRAMESIZE_VGA,
         .jpeg_quality = 12,
         .grab_mode    = CAMERA_GRAB_WHEN_EMPTY,
     };
@@ -92,7 +92,6 @@ esp_err_t camera_init(void)
     }
 
     sensor_t *s = esp_camera_sensor_get();
-    s->set_vflip(s, 1);
     s->set_brightness(s, 1);
     s->set_saturation(s, 0);
     s->set_aec2(s, 0);
