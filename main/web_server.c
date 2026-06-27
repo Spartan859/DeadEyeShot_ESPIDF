@@ -1,4 +1,5 @@
 #include "web_server.h"
+#include "camera_driver.h"
 #include "esp_log.h"
 #include "esp_http_server.h"
 #include "freertos/FreeRTOS.h"
@@ -92,7 +93,7 @@ static const char HTML_PAGE[] =
 static void set_cors_headers(httpd_req_t *req)
 {
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET, OPTIONS");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET, PUT, OPTIONS");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "Content-Type, Access-Control-Request-Private-Network");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Private-Network", "true");
 }
@@ -296,6 +297,65 @@ static esp_err_t video_ws_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+
+static esp_err_t recv_request_body(httpd_req_t *req, char *buf, size_t buf_len)
+{
+    size_t remaining = req->content_len;
+    size_t offset = 0;
+    if (buf_len == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    while (remaining > 0 && offset < buf_len - 1) {
+        int read_len = httpd_req_recv(req, buf + offset, buf_len - 1 - offset);
+        if (read_len <= 0) {
+            return ESP_FAIL;
+        }
+        offset += read_len;
+        remaining -= read_len;
+    }
+    buf[offset] = '\0';
+    return remaining == 0 ? ESP_OK : ESP_ERR_INVALID_SIZE;
+}
+
+static bool json_has_active_value(const char *json, bool active)
+{
+    return active ? (strstr(json, "\"active\":true") || strstr(json, "\"active\": true"))
+                  : (strstr(json, "\"active\":false") || strstr(json, "\"active\": false"));
+}
+
+static esp_err_t api_camera_state_handler(httpd_req_t *req)
+{
+    set_cors_headers(req);
+    httpd_resp_set_type(req, "application/json");
+
+    if (req->method == HTTP_PUT) {
+        char body[128];
+        esp_err_t err = recv_request_body(req, body, sizeof(body));
+        if (err != ESP_OK) {
+            httpd_resp_set_status(req, "400 Bad Request");
+            httpd_resp_sendstr(req, "{\"error\":\"bad_body\"}");
+            return ESP_OK;
+        }
+        if (json_has_active_value(body, true)) {
+            camera_request_active(true);
+        } else if (json_has_active_value(body, false)) {
+            camera_request_active(false);
+            close_video_client();
+        } else {
+            httpd_resp_set_status(req, "400 Bad Request");
+            httpd_resp_sendstr(req, "{\"error\":\"missing_active\"}");
+            return ESP_OK;
+        }
+    }
+
+    char json[96];
+    snprintf(json, sizeof(json), "{\"active\":%s,\"capturing\":%s}",
+             camera_wants_active() ? "true" : "false",
+             camera_is_active() ? "true" : "false");
+    httpd_resp_send(req, json, strlen(json));
+    return ESP_OK;
+}
+
 static esp_err_t shot_jpg_handler(httpd_req_t *req)
 {
     xSemaphoreTake(s_shot_mutex, portMAX_DELAY);
@@ -423,7 +483,7 @@ esp_err_t web_server_init(void)
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = WEB_SERVER_PORT;
-    config.max_uri_handlers = 7;
+    config.max_uri_handlers = 9;
     config.max_open_sockets = 7;
     config.uri_match_fn = httpd_uri_match_wildcard;
 
@@ -438,6 +498,8 @@ esp_err_t web_server_init(void)
     httpd_uri_t video_uri = { .uri = "/ws/video", .method = HTTP_GET, .handler = video_ws_handler, .is_websocket = true };
     httpd_uri_t events_uri  = { .uri = "/api/shot/events", .method = HTTP_GET, .handler = api_shot_events_handler };
     httpd_uri_t api_uri  = { .uri = "/api/shot", .method = HTTP_GET, .handler = api_shot_handler };
+    httpd_uri_t camera_state_get_uri = { .uri = "/api/camera/state", .method = HTTP_GET, .handler = api_camera_state_handler };
+    httpd_uri_t camera_state_put_uri = { .uri = "/api/camera/state", .method = HTTP_PUT, .handler = api_camera_state_handler };
     httpd_uri_t options_uri = { .uri = "/*", .method = HTTP_OPTIONS, .handler = options_handler };
 
     httpd_register_uri_handler(s_server, &options_uri);
@@ -447,6 +509,8 @@ esp_err_t web_server_init(void)
     httpd_register_uri_handler(s_server, &video_uri);
     httpd_register_uri_handler(s_server, &events_uri);
     httpd_register_uri_handler(s_server, &api_uri);
+    httpd_register_uri_handler(s_server, &camera_state_get_uri);
+    httpd_register_uri_handler(s_server, &camera_state_put_uri);
 
     xTaskCreatePinnedToCore(video_task, "video_ws", VIDEO_TASK_STACK_SIZE,
                             NULL, 3, &s_video_task, 1);

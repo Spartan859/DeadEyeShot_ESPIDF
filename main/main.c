@@ -23,6 +23,16 @@ static SemaphoreHandle_t s_trigger_sem;
 static camera_fb_t *s_latest_fb = NULL;
 static SemaphoreHandle_t s_frame_mutex;
 
+static void clear_latest_frame(void)
+{
+    xSemaphoreTake(s_frame_mutex, portMAX_DELAY);
+    if (s_latest_fb) {
+        camera_return_fb(s_latest_fb);
+        s_latest_fb = NULL;
+    }
+    xSemaphoreGive(s_frame_mutex);
+}
+
 #if CONFIG_DEADEYE_CAMERA_FPS_TEST
 static void camera_fps_test(void)
 {
@@ -83,6 +93,19 @@ static void camera_task(void *arg)
     int64_t video_max_us = 0;
 
     while (1) {
+        if (!camera_wants_active()) {
+            clear_latest_frame();
+            if (camera_is_active()) {
+                camera_deinit();
+            }
+            vTaskDelay(pdMS_TO_TICKS(200));
+            continue;
+        }
+        if (!camera_is_active() && camera_init() != ESP_OK) {
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            continue;
+        }
+
         int64_t capture_start = esp_timer_get_time();
         camera_fb_t *fb = camera_capture();
         int64_t capture_us = esp_timer_get_time() - capture_start;
@@ -140,41 +163,39 @@ static void proc_task(void *arg)
     while (1) {
         xSemaphoreTake(s_trigger_sem, portMAX_DELAY);
 
-        int64_t t_start = esp_timer_get_time();
-        ESP_LOGI(TAG, "=== TRIGGER PRESSED ===");
-        ble_notify_status(0x01);
-
-        camera_fb_t *fb = NULL;
-        xSemaphoreTake(s_frame_mutex, portMAX_DELAY);
-        fb = s_latest_fb;
-        s_latest_fb = NULL;
-        xSemaphoreGive(s_frame_mutex);
-
-        if (!fb) {
-            ESP_LOGW(TAG, "No frame available");
-            ble_notify_status(0xFF);
+        if (!camera_wants_active() || !camera_is_active()) {
+            ESP_LOGW(TAG, "Trigger ignored while camera is inactive");
             continue;
         }
 
-        int width = fb->width;
-        int height = fb->height;
-        int jpeg_len = fb->len;
-
+        int64_t t_start = esp_timer_get_time();
+        ESP_LOGI(TAG, "=== TRIGGER PRESSED ===");
+        int width = 0;
+        int height = 0;
+        int jpeg_len = 0;
         uint8_t *jpeg_copy = NULL;
-        if (fb->format == PIXFORMAT_JPEG && fb->len > 0) {
-            jpeg_copy = (uint8_t *)malloc(fb->len);
-            if (jpeg_copy) {
-                memcpy(jpeg_copy, fb->buf, fb->len);
-            }
-        } else {
-            ESP_LOGE(TAG, "Frame is not JPEG: format=%d len=%d", fb->format, fb->len);
-        }
 
-        camera_return_fb(fb);
+        xSemaphoreTake(s_frame_mutex, portMAX_DELAY);
+        camera_fb_t *fb = s_latest_fb;
+        s_latest_fb = NULL;
+        if (fb) {
+            width = fb->width;
+            height = fb->height;
+            jpeg_len = fb->len;
+            if (fb->format == PIXFORMAT_JPEG && fb->len > 0) {
+                jpeg_copy = (uint8_t *)malloc(fb->len);
+                if (jpeg_copy) {
+                    memcpy(jpeg_copy, fb->buf, fb->len);
+                }
+            } else {
+                ESP_LOGE(TAG, "Frame is not JPEG: format=%d len=%d", fb->format, fb->len);
+            }
+            camera_return_fb(fb);
+        }
+        xSemaphoreGive(s_frame_mutex);
 
         if (!jpeg_copy) {
-            ESP_LOGE(TAG, "No JPEG data for upload");
-            ble_notify_status(0xFF);
+            ESP_LOGW(TAG, "No JPEG frame available");
             continue;
         }
 
@@ -186,7 +207,6 @@ static void proc_task(void *arg)
                  width, height, jpeg_len, elapsed_ms);
         free(jpeg_copy);
 
-        ble_notify_status(0x02);
     }
 }
 
@@ -204,6 +224,7 @@ void app_main(void)
         ESP_ERROR_CHECK(ret);
     }
 
+    camera_request_active(true);
     ESP_ERROR_CHECK(camera_init());
     camera_fps_test();
     return;
@@ -226,11 +247,10 @@ void app_main(void)
     // Init web server
     ESP_ERROR_CHECK(web_server_init());
 
-    // Init BLE
+    // Init BLE provisioning
     ESP_ERROR_CHECK(ble_service_init());
 
-    // Init camera
-    ESP_ERROR_CHECK(camera_init());
+    camera_request_active(false);
 
     // Init trigger GPIO
     ESP_ERROR_CHECK(trigger_init(s_trigger_sem));

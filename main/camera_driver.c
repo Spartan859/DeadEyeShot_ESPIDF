@@ -2,6 +2,8 @@
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "esp_system.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include <string.h>
 
 static const char *TAG = "camera";
@@ -26,8 +28,23 @@ static const char *TAG = "camera";
 #define HREF_GPIO_NUM     7
 #define PCLK_GPIO_NUM     13
 
-esp_err_t camera_init(void)
+static SemaphoreHandle_t s_camera_mutex = NULL;
+static bool s_camera_active = false;
+static bool s_camera_requested_active = false;
+
+static void ensure_camera_mutex(void)
 {
+    if (!s_camera_mutex) {
+        s_camera_mutex = xSemaphoreCreateMutex();
+    }
+}
+
+static esp_err_t camera_init_locked(void)
+{
+    if (s_camera_active) {
+        return ESP_OK;
+    }
+
     bool psram_available = (heap_caps_get_total_size(MALLOC_CAP_SPIRAM) > 0);
     ESP_LOGI(TAG, "PSRAM %s (%lu bytes)",
              psram_available ? "detected" : "NOT detected",
@@ -58,7 +75,6 @@ esp_err_t camera_init(void)
         .ledc_timer   = LEDC_TIMER_0,
         .ledc_channel = LEDC_CHANNEL_0,
 
-        // Use JPEG first to diagnose if camera works at all
         .pixel_format = PIXFORMAT_JPEG,
         .frame_size   = FRAMESIZE_VGA,
         .jpeg_quality = 12,
@@ -92,32 +108,84 @@ esp_err_t camera_init(void)
     }
 
     sensor_t *s = esp_camera_sensor_get();
-    s->set_brightness(s, 1);
-    s->set_saturation(s, 0);
-    s->set_aec2(s, 1);
-    s->set_exposure_ctrl(s, 1);
-    s->set_gain_ctrl(s, 1);
-
-    ESP_LOGI(TAG, "Camera init OK (QVGA JPEG, %s)",
-             config.fb_location == CAMERA_FB_IN_PSRAM ? "PSRAM" : "DRAM");
-
-    // Test capture to verify camera works
-    ESP_LOGI(TAG, "Test capture...");
-    camera_fb_t *fb = esp_camera_fb_get();
-    if (fb) {
-        ESP_LOGI(TAG, "Test capture OK: %dx%d, %d bytes, format=%d",
-                 fb->width, fb->height, fb->len, fb->format);
-        esp_camera_fb_return(fb);
-    } else {
-        ESP_LOGE(TAG, "Test capture FAILED");
+    if (s) {
+        s->set_brightness(s, 1);
+        s->set_saturation(s, 0);
+        s->set_aec2(s, 1);
+        s->set_exposure_ctrl(s, 1);
+        s->set_gain_ctrl(s, 1);
     }
 
+    s_camera_active = true;
+    ESP_LOGI(TAG, "Camera active (VGA JPEG, %s)",
+             config.fb_location == CAMERA_FB_IN_PSRAM ? "PSRAM" : "DRAM");
     return ESP_OK;
+}
+
+esp_err_t camera_init(void)
+{
+    ensure_camera_mutex();
+    xSemaphoreTake(s_camera_mutex, portMAX_DELAY);
+    esp_err_t err = camera_init_locked();
+    xSemaphoreGive(s_camera_mutex);
+    return err;
+}
+
+esp_err_t camera_deinit(void)
+{
+    ensure_camera_mutex();
+    xSemaphoreTake(s_camera_mutex, portMAX_DELAY);
+    if (!s_camera_active) {
+        xSemaphoreGive(s_camera_mutex);
+        return ESP_OK;
+    }
+    esp_err_t err = esp_camera_deinit();
+    if (err == ESP_OK) {
+        s_camera_active = false;
+        ESP_LOGI(TAG, "Camera inactive");
+    } else {
+        ESP_LOGE(TAG, "Camera deinit failed: 0x%x", err);
+    }
+    xSemaphoreGive(s_camera_mutex);
+    return err;
+}
+
+void camera_request_active(bool active)
+{
+    ensure_camera_mutex();
+    xSemaphoreTake(s_camera_mutex, portMAX_DELAY);
+    s_camera_requested_active = active;
+    xSemaphoreGive(s_camera_mutex);
+}
+
+bool camera_wants_active(void)
+{
+    ensure_camera_mutex();
+    xSemaphoreTake(s_camera_mutex, portMAX_DELAY);
+    bool active = s_camera_requested_active;
+    xSemaphoreGive(s_camera_mutex);
+    return active;
+}
+
+bool camera_is_active(void)
+{
+    ensure_camera_mutex();
+    xSemaphoreTake(s_camera_mutex, portMAX_DELAY);
+    bool active = s_camera_active;
+    xSemaphoreGive(s_camera_mutex);
+    return active;
 }
 
 camera_fb_t *camera_capture(void)
 {
+    ensure_camera_mutex();
+    xSemaphoreTake(s_camera_mutex, portMAX_DELAY);
+    if (!s_camera_active) {
+        xSemaphoreGive(s_camera_mutex);
+        return NULL;
+    }
     camera_fb_t *fb = esp_camera_fb_get();
+    xSemaphoreGive(s_camera_mutex);
     if (!fb) {
         ESP_LOGE(TAG, "Camera capture failed");
     }
