@@ -7,7 +7,10 @@ typedef struct {
     int center_x;
     int center_y;
     float black_radius;
+    float confidence;
     bool found;
+    const char *reason;
+    const char *method;
 } target_result_t;
 
 // If mask_out is non-NULL, fills it with binary mask (255=dark, 0=light).
