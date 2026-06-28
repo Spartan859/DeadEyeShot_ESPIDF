@@ -80,4 +80,5 @@ Desktop.ini
 tmp/
 
 .cache/
+.codex/
 .playwright-mcp/
