@@ -1,6 +1,6 @@
-# CLAUDE.md - Coding Profile
+# AGENTS.md - Coding Profile
 # Best for: dev projects, code review, debugging, refactoring
-# Extends: Universal CLAUDE.md rules
+# Extends: Universal AGENTS.md rules
 
 ---
 
@@ -32,7 +32,7 @@
 - Every code change must be committed immediately after editing.
 - If the change is a major algorithm swap or large-scale rewrite, create a new branch first, then commit.
 - For algorithm changes, write the full method description to UPDATES.md (in Chinese) in the project root before committing.
-- CLAUDE.md changes must be synced to all branches (commit on current branch, then cherry-pick to others).
+- AGENTS.md changes must be synced to all branches (commit on current branch, then cherry-pick to others).
 
 ## Build Environment
 - ESP-IDF v5.5.4

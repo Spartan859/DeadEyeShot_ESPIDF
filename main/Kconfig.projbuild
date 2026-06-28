@@ -1,0 +1,11 @@
+menu "DeadEyeShot"
+
+    config DEADEYE_CAMERA_FPS_TEST
+        bool "Run camera FPS test only"
+        default n
+        help
+            Initialize only NVS and camera, then continuously capture frames and
+            print FPS statistics. This isolates camera driver throughput from
+            WiFi, BLE, web server, and app logic.
+
+endmenu
