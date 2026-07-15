@@ -3,23 +3,43 @@
 #include "esp_log.h"
 
 static const char *TAG = "trigger";
-static SemaphoreHandle_t s_trigger_sem;
+static SemaphoreHandle_t s_shoot_sem;
+static SemaphoreHandle_t s_reload_sem;
+static volatile TickType_t s_last_shoot_tick;
+static volatile TickType_t s_last_reload_tick;
 
-static void IRAM_ATTR trigger_isr_handler(void *arg)
+static void IRAM_ATTR give_debounced(SemaphoreHandle_t sem, volatile TickType_t *last_tick)
 {
+    TickType_t now = xTaskGetTickCountFromISR();
+    TickType_t debounce_ticks = pdMS_TO_TICKS(50);
+    if (*last_tick != 0 && now - *last_tick < debounce_ticks) {
+        return;
+    }
+    *last_tick = now;
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-    xSemaphoreGiveFromISR(s_trigger_sem, &xHigherPriorityTaskWoken);
+    xSemaphoreGiveFromISR(sem, &xHigherPriorityTaskWoken);
     if (xHigherPriorityTaskWoken == pdTRUE) {
         portYIELD_FROM_ISR();
     }
 }
 
-esp_err_t trigger_init(SemaphoreHandle_t trigger_sem)
+static void IRAM_ATTR shoot_isr_handler(void *arg)
 {
-    s_trigger_sem = trigger_sem;
+    give_debounced(s_shoot_sem, &s_last_shoot_tick);
+}
+
+static void IRAM_ATTR reload_isr_handler(void *arg)
+{
+    give_debounced(s_reload_sem, &s_last_reload_tick);
+}
+
+esp_err_t trigger_init(SemaphoreHandle_t shoot_sem, SemaphoreHandle_t reload_sem)
+{
+    s_shoot_sem = shoot_sem;
+    s_reload_sem = reload_sem;
 
     gpio_config_t io_conf = {
-        .pin_bit_mask = (1ULL << TRIGGER_GPIO),
+        .pin_bit_mask = (1ULL << SHOOT_GPIO) | (1ULL << RELOAD_GPIO),
         .mode = GPIO_MODE_INPUT,
         .pull_up_en = GPIO_PULLUP_ENABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
@@ -38,12 +58,19 @@ esp_err_t trigger_init(SemaphoreHandle_t trigger_sem)
         return err;
     }
 
-    err = gpio_isr_handler_add(TRIGGER_GPIO, trigger_isr_handler, NULL);
+    err = gpio_isr_handler_add(SHOOT_GPIO, shoot_isr_handler, NULL);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "ISR handler add failed: 0x%x", err);
+        ESP_LOGE(TAG, "Shoot ISR handler add failed: 0x%x", err);
         return err;
     }
 
-    ESP_LOGI(TAG, "Trigger init OK (GPIO %d, falling edge)", TRIGGER_GPIO);
+    err = gpio_isr_handler_add(RELOAD_GPIO, reload_isr_handler, NULL);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Reload ISR handler add failed: 0x%x", err);
+        return err;
+    }
+
+    ESP_LOGI(TAG, "Inputs ready (shoot GPIO %d, reload GPIO %d, falling edge)",
+             SHOOT_GPIO, RELOAD_GPIO);
     return ESP_OK;
 }

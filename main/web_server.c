@@ -14,6 +14,7 @@
 static const char *TAG = "web";
 
 #define SHOT_QUEUE_CAPACITY 8
+#define RELOAD_QUEUE_CAPACITY 8
 #define VIDEO_HEADER_LEN 21
 #define VIDEO_TASK_STACK_SIZE 4096
 #define VIDEO_TASK_DELAY_MS 5
@@ -48,6 +49,10 @@ static shot_entry_t s_shots[SHOT_QUEUE_CAPACITY];
 static int s_shot_start = 0;
 static int s_shot_count = 0;
 static uint32_t s_next_shot_id = 1;
+static uint32_t s_reload_ids[RELOAD_QUEUE_CAPACITY];
+static int s_reload_start = 0;
+static int s_reload_count = 0;
+static uint32_t s_next_reload_id = 1;
 static video_frame_t s_video_frame;
 
 // HTML page
@@ -418,14 +423,14 @@ static esp_err_t api_shot_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
-static uint32_t parse_after_query(httpd_req_t *req)
+static uint32_t parse_query_id(httpd_req_t *req, const char *key)
 {
     char query[64];
     char value[24];
     if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK) {
         return 0;
     }
-    if (httpd_query_key_value(query, "after", value, sizeof(value)) != ESP_OK) {
+    if (httpd_query_key_value(query, key, value, sizeof(value)) != ESP_OK) {
         return 0;
     }
     return (uint32_t)strtoul(value, NULL, 10);
@@ -433,8 +438,9 @@ static uint32_t parse_after_query(httpd_req_t *req)
 
 static esp_err_t api_shot_events_handler(httpd_req_t *req)
 {
-    uint32_t after = parse_after_query(req);
-    char json[1024];
+    uint32_t after = parse_query_id(req, "after");
+    uint32_t reload_after = parse_query_id(req, "reload_after");
+    char json[2048];
     int offset = 0;
 
     xSemaphoreTake(s_shot_mutex, portMAX_DELAY);
@@ -465,8 +471,32 @@ static esp_err_t api_shot_events_handler(httpd_req_t *req)
         }
     }
 
+    uint32_t reload_oldest_id = s_reload_count > 0 ? s_reload_ids[s_reload_start] : 0;
+    uint32_t reload_latest_id = s_reload_count > 0
+        ? s_reload_ids[(s_reload_start + s_reload_count - 1) % RELOAD_QUEUE_CAPACITY]
+        : 0;
+    bool reload_overflow = s_reload_count > 0 && reload_after + 1 < reload_oldest_id;
+    offset += snprintf(json + offset, sizeof(json) - offset,
+                       "],\"overflow\":%s,\"reload_latest_id\":%lu,"
+                       "\"reload_oldest_id\":%lu,\"reload_events\":[",
+                       overflow ? "true" : "false",
+                       (unsigned long)reload_latest_id,
+                       (unsigned long)reload_oldest_id);
+
+    first = true;
+    for (int i = 0; i < s_reload_count; i++) {
+        uint32_t id = s_reload_ids[(s_reload_start + i) % RELOAD_QUEUE_CAPACITY];
+        if (id <= reload_after) {
+            continue;
+        }
+        offset += snprintf(json + offset, sizeof(json) - offset,
+                           "%s{\"id\":%lu}", first ? "" : ",",
+                           (unsigned long)id);
+        first = false;
+    }
+
     snprintf(json + offset, sizeof(json) - offset,
-             "],\"overflow\":%s}", overflow ? "true" : "false");
+             "],\"reload_overflow\":%s}", reload_overflow ? "true" : "false");
 
     xSemaphoreGive(s_shot_mutex);
 
@@ -555,6 +585,22 @@ void web_server_update_shot(const uint8_t *jpeg_data, int jpeg_len,
         s_shot_count = 0;
     }
 
+    xSemaphoreGive(s_shot_mutex);
+}
+
+void web_server_update_reload(void)
+{
+    xSemaphoreTake(s_shot_mutex, portMAX_DELAY);
+
+    if (s_reload_count == RELOAD_QUEUE_CAPACITY) {
+        s_reload_start = (s_reload_start + 1) % RELOAD_QUEUE_CAPACITY;
+        s_reload_count--;
+    }
+    int index = (s_reload_start + s_reload_count) % RELOAD_QUEUE_CAPACITY;
+    s_reload_ids[index] = s_next_reload_id++;
+    s_reload_count++;
+
+    ESP_LOGI(TAG, "Queued reload #%lu", (unsigned long)s_reload_ids[index]);
     xSemaphoreGive(s_shot_mutex);
 }
 

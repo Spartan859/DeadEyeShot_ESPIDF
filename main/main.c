@@ -17,9 +17,11 @@ static const char *TAG = "main";
 
 #define PROC_TASK_STACK_SIZE  8192
 #define CAMERA_TASK_STACK_SIZE 4096
+#define RELOAD_TASK_STACK_SIZE 2048
 
 // Shared state
-static SemaphoreHandle_t s_trigger_sem;
+static SemaphoreHandle_t s_shoot_sem;
+static SemaphoreHandle_t s_reload_sem;
 static camera_fb_t *s_latest_fb = NULL;
 static SemaphoreHandle_t s_frame_mutex;
 
@@ -161,7 +163,7 @@ static void proc_task(void *arg)
     ESP_LOGI(TAG, "Processing task started");
 
     while (1) {
-        xSemaphoreTake(s_trigger_sem, portMAX_DELAY);
+        xSemaphoreTake(s_shoot_sem, portMAX_DELAY);
 
         if (!camera_wants_active() || !camera_is_active()) {
             ESP_LOGW(TAG, "Trigger ignored while camera is inactive");
@@ -210,6 +212,15 @@ static void proc_task(void *arg)
     }
 }
 
+static void reload_task(void *arg)
+{
+    ESP_LOGI(TAG, "Reload task started");
+    while (1) {
+        xSemaphoreTake(s_reload_sem, portMAX_DELAY);
+        web_server_update_reload();
+    }
+}
+
 void app_main(void)
 {
     ESP_LOGI(TAG, "DeadEyeShot starting...");
@@ -230,7 +241,8 @@ void app_main(void)
     return;
 #endif
 
-    s_trigger_sem = xSemaphoreCreateBinary();
+    s_shoot_sem = xSemaphoreCreateBinary();
+    s_reload_sem = xSemaphoreCreateBinary();
     s_frame_mutex = xSemaphoreCreateMutex();
 
     // Init NVS (required by BLE and WiFi)
@@ -253,12 +265,14 @@ void app_main(void)
     camera_request_active(false);
 
     // Init trigger GPIO
-    ESP_ERROR_CHECK(trigger_init(s_trigger_sem));
+    ESP_ERROR_CHECK(trigger_init(s_shoot_sem, s_reload_sem));
 
     // Create tasks
     xTaskCreatePinnedToCore(camera_task, "camera", CAMERA_TASK_STACK_SIZE,
                             NULL, 5, NULL, 0);
     xTaskCreatePinnedToCore(proc_task, "proc", PROC_TASK_STACK_SIZE,
+                            NULL, 4, NULL, 1);
+    xTaskCreatePinnedToCore(reload_task, "reload", RELOAD_TASK_STACK_SIZE,
                             NULL, 4, NULL, 1);
 
     ESP_LOGI(TAG, "DeadEyeShot ready. Waiting for trigger...");
