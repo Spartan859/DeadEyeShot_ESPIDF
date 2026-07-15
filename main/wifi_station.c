@@ -13,6 +13,7 @@ static const char *NVS_KEY_PASS = "pass";
 
 static bool s_connected = false;
 static bool s_started = false;
+static bool s_reconfiguring = false;
 static bool s_has_credentials = false;
 static char s_ssid[33] = {0};
 static char s_password[65] = {0};
@@ -87,17 +88,32 @@ static esp_err_t apply_credentials(void)
     strncpy((char *)wifi_config.sta.ssid, s_ssid, sizeof(wifi_config.sta.ssid) - 1);
     strncpy((char *)wifi_config.sta.password, s_password, sizeof(wifi_config.sta.password) - 1);
 
+    bool restart_wifi = s_started;
+    if (restart_wifi) {
+        s_reconfiguring = true;
+        s_connected = false;
+        ESP_LOGI(TAG, "Stopping current WiFi connection before applying new credentials");
+        esp_err_t stop_err = esp_wifi_stop();
+        if (stop_err != ESP_OK) {
+            s_reconfiguring = false;
+            set_status("stop_failed");
+            return stop_err;
+        }
+        s_started = false;
+    }
+
     esp_err_t err = esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
     if (err != ESP_OK) {
+        s_reconfiguring = false;
         set_status("config_failed");
         return err;
     }
 
-    if (s_started) {
-        esp_wifi_disconnect();
-        err = esp_wifi_connect();
+    if (restart_wifi) {
+        err = esp_wifi_start();
         if (err != ESP_OK) {
-            set_status("connect_failed");
+            s_reconfiguring = false;
+            set_status("start_failed");
             return err;
         }
     }
@@ -111,11 +127,19 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
 {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
         s_started = true;
+        s_reconfiguring = false;
         if (s_has_credentials) {
             esp_wifi_connect();
             set_status("connecting");
         }
+    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_STOP) {
+        s_started = false;
+        s_connected = false;
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        if (s_reconfiguring) {
+            ESP_LOGI(TAG, "WiFi disconnected for credential update");
+            return;
+        }
         ESP_LOGW(TAG, "WiFi disconnected%s", s_has_credentials ? ", reconnecting..." : "");
         s_connected = false;
         set_status(s_has_credentials ? "disconnected" : "not_configured");
