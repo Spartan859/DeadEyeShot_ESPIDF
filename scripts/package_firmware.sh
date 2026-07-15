@@ -10,7 +10,9 @@ if [ -z "${IDF_PATH:-}" ]; then
 		echo "未找到 ESP-IDF 5.5.4。请先激活 ESP-IDF 环境。" >&2
 		exit 1
 	fi
-	. "$IDF_ACTIVATE"
+	set -a
+	eval "$("$IDF_ACTIVATE" -e)"
+	set +a
 fi
 set -u
 
