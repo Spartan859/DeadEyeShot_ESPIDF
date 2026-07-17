@@ -15,6 +15,7 @@ static const char *TAG = "web";
 
 #define SHOT_QUEUE_CAPACITY 8
 #define RELOAD_QUEUE_CAPACITY 8
+#define EVENTS_JSON_CAPACITY 2048
 #define VIDEO_HEADER_LEN 21
 #define VIDEO_TASK_STACK_SIZE 4096
 #define VIDEO_TASK_DELAY_MS 5
@@ -54,6 +55,7 @@ static int s_reload_start = 0;
 static int s_reload_count = 0;
 static uint32_t s_next_reload_id = 1;
 static video_frame_t s_video_frame;
+static char s_events_json[EVENTS_JSON_CAPACITY];
 
 // HTML page
 static const char HTML_PAGE[] =
@@ -440,7 +442,7 @@ static esp_err_t api_shot_events_handler(httpd_req_t *req)
 {
     uint32_t after = parse_query_id(req, "after");
     uint32_t reload_after = parse_query_id(req, "reload_after");
-    char json[2048];
+    char *json = s_events_json;
     int offset = 0;
 
     xSemaphoreTake(s_shot_mutex, portMAX_DELAY);
@@ -449,7 +451,7 @@ static esp_err_t api_shot_events_handler(httpd_req_t *req)
     uint32_t latest_id = get_latest_id();
     bool overflow = (s_shot_count > 0 && after + 1 < oldest_id);
 
-    offset += snprintf(json + offset, sizeof(json) - offset,
+    offset += snprintf(json + offset, EVENTS_JSON_CAPACITY - offset,
                        "{\"latest_id\":%lu,\"oldest_id\":%lu,\"events\":[",
                        (unsigned long)latest_id, (unsigned long)oldest_id);
 
@@ -460,13 +462,13 @@ static esp_err_t api_shot_events_handler(httpd_req_t *req)
         if (shot->id <= after) {
             continue;
         }
-        offset += snprintf(json + offset, sizeof(json) - offset,
+        offset += snprintf(json + offset, EVENTS_JSON_CAPACITY - offset,
                            "%s{\"id\":%lu,\"w\":%d,\"h\":%d,\"jpeg_len\":%d}",
                            first ? "" : ",",
                            (unsigned long)shot->id, shot->width,
                            shot->height, shot->jpeg_len);
         first = false;
-        if (offset >= (int)sizeof(json) - 128) {
+        if (offset >= EVENTS_JSON_CAPACITY - 128) {
             break;
         }
     }
@@ -476,7 +478,7 @@ static esp_err_t api_shot_events_handler(httpd_req_t *req)
         ? s_reload_ids[(s_reload_start + s_reload_count - 1) % RELOAD_QUEUE_CAPACITY]
         : 0;
     bool reload_overflow = s_reload_count > 0 && reload_after + 1 < reload_oldest_id;
-    offset += snprintf(json + offset, sizeof(json) - offset,
+    offset += snprintf(json + offset, EVENTS_JSON_CAPACITY - offset,
                        "],\"overflow\":%s,\"reload_latest_id\":%lu,"
                        "\"reload_oldest_id\":%lu,\"reload_events\":[",
                        overflow ? "true" : "false",
@@ -489,13 +491,13 @@ static esp_err_t api_shot_events_handler(httpd_req_t *req)
         if (id <= reload_after) {
             continue;
         }
-        offset += snprintf(json + offset, sizeof(json) - offset,
+        offset += snprintf(json + offset, EVENTS_JSON_CAPACITY - offset,
                            "%s{\"id\":%lu}", first ? "" : ",",
                            (unsigned long)id);
         first = false;
     }
 
-    snprintf(json + offset, sizeof(json) - offset,
+    snprintf(json + offset, EVENTS_JSON_CAPACITY - offset,
              "],\"reload_overflow\":%s}", reload_overflow ? "true" : "false");
 
     xSemaphoreGive(s_shot_mutex);
