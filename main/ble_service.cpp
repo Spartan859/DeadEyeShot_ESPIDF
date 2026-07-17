@@ -5,6 +5,11 @@
 #include "BLEServer.h"
 #include "BLECharacteristic.h"
 #include "BLE2902.h"
+#include "esp_mac.h"
+#include "esp_system.h"
+#include "nvs.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include <string>
 #include <cstring>
 
@@ -15,12 +20,88 @@ static const char *TAG = "ble";
 #define CHAR_UUID_PASS    "DEAD0003-B5A3-F393-E0A9-E50E24DCCA9E"
 #define CHAR_UUID_APPLY   "DEAD0004-B5A3-F393-E0A9-E50E24DCCA9E"
 #define CHAR_UUID_STATUS  "DEAD0005-B5A3-F393-E0A9-E50E24DCCA9E"
+#define CHAR_UUID_NAME    "DEAD0006-B5A3-F393-E0A9-E50E24DCCA9E"
+#define DEVICE_NAME_MAX_BYTES 24
+
+static const char *NVS_NAMESPACE = "ble_cfg";
+static const char *NVS_KEY_DEVICE_NAME = "device_name";
 
 static BLEServer *s_server = nullptr;
 static BLECharacteristic *s_status_char = nullptr;
 static bool s_device_connected = false;
 static std::string s_pending_ssid;
 static std::string s_pending_pass;
+static std::string s_device_name;
+
+static std::string default_device_name(void)
+{
+    uint8_t mac[6] = {};
+    ESP_ERROR_CHECK(esp_read_mac(mac, ESP_MAC_BT));
+
+    uint32_t hash = 2166136261u;
+    for (uint8_t byte : mac) {
+        hash ^= byte;
+        hash *= 16777619u;
+    }
+
+    static const char alphabet[] = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    char suffix[7] = {};
+    for (int i = 5; i >= 0; --i) {
+        suffix[i] = alphabet[hash & 31u];
+        hash >>= 5;
+    }
+    return std::string("DeadEyeShot-") + suffix;
+}
+
+static std::string load_device_name(void)
+{
+    char value[DEVICE_NAME_MAX_BYTES + 1] = {};
+    size_t length = sizeof(value);
+    nvs_handle_t nvs;
+    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs);
+    if (err == ESP_OK) {
+        err = nvs_get_str(nvs, NVS_KEY_DEVICE_NAME, value, &length);
+        nvs_close(nvs);
+        if (err == ESP_OK && value[0] != '\0') {
+            return value;
+        }
+    }
+    return default_device_name();
+}
+
+static esp_err_t save_device_name(const std::string &name)
+{
+    nvs_handle_t nvs;
+    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs);
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = nvs_set_str(nvs, NVS_KEY_DEVICE_NAME, name.c_str());
+    if (err == ESP_OK) {
+        err = nvs_commit(nvs);
+    }
+    nvs_close(nvs);
+    return err;
+}
+
+static bool valid_device_name(const std::string &name)
+{
+    if (name.empty() || name.size() > DEVICE_NAME_MAX_BYTES) {
+        return false;
+    }
+    for (unsigned char byte : name) {
+        if (byte < 0x20 || byte == 0x7f) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static void restart_after_name_change(void *arg)
+{
+    vTaskDelay(pdMS_TO_TICKS(800));
+    esp_restart();
+}
 
 static void update_status(const char *status)
 {
@@ -89,9 +170,35 @@ class ApplyCallbacks : public BLECharacteristicCallbacks {
     }
 };
 
+class DeviceNameCallbacks : public BLECharacteristicCallbacks {
+    void onWrite(BLECharacteristic *characteristic) override {
+        String value = characteristic->getValue();
+        std::string name = value.c_str();
+        if (!valid_device_name(name)) {
+            update_status("device_name_invalid");
+            ESP_LOGW(TAG, "BLE device name rejected (%u bytes)", (unsigned)name.size());
+            return;
+        }
+
+        esp_err_t err = save_device_name(name);
+        if (err != ESP_OK) {
+            update_status("device_name_write_failed");
+            ESP_LOGE(TAG, "BLE device name save failed: 0x%x", err);
+            return;
+        }
+
+        s_device_name = name;
+        characteristic->setValue((uint8_t *)s_device_name.data(), s_device_name.size());
+        update_status("device_name_saved");
+        ESP_LOGI(TAG, "BLE device name changed to '%s', restarting", s_device_name.c_str());
+        xTaskCreate(restart_after_name_change, "ble_name_restart", 2048, nullptr, 3, nullptr);
+    }
+};
+
 esp_err_t ble_service_init(void)
 {
-    BLEDevice::init("DeadEyeShot-Setup");
+    s_device_name = load_device_name();
+    BLEDevice::init(s_device_name.c_str());
 
     s_server = BLEDevice::createServer();
     s_server->setCallbacks(new ServerCallbacks());
@@ -123,11 +230,18 @@ esp_err_t ble_service_init(void)
     s_status_char->addDescriptor(new BLE2902());
     update_status(wifi_get_status_text());
 
+    BLECharacteristic *name_char = service->createCharacteristic(
+        CHAR_UUID_NAME,
+        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE
+    );
+    name_char->setValue((uint8_t *)s_device_name.data(), s_device_name.size());
+    name_char->setCallbacks(new DeviceNameCallbacks());
+
     service->start();
     s_server->getAdvertising()->addServiceUUID(SERVICE_UUID);
     s_server->getAdvertising()->start();
     wifi_set_status_callback(on_wifi_status_changed);
 
-    ESP_LOGI(TAG, "BLE provisioning service ready as 'DeadEyeShot-Setup'");
+    ESP_LOGI(TAG, "BLE provisioning service ready as '%s'", s_device_name.c_str());
     return ESP_OK;
 }
