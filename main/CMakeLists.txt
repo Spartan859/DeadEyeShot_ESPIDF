@@ -1,4 +1,5 @@
 idf_component_register(SRCS "main.c"
+                        "buzzer.c"
                         "camera_driver.c"
                         "trigger.c"
                         "ble_service.cpp"

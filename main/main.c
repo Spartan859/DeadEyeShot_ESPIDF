@@ -8,6 +8,7 @@
 #include "nvs_flash.h"
 
 #include "camera_driver.h"
+#include "buzzer.h"
 #include "trigger.h"
 #include "ble_service.h"
 #include "wifi_station.h"
@@ -244,6 +245,9 @@ void app_main(void)
     s_shoot_sem = xSemaphoreCreateBinary();
     s_reload_sem = xSemaphoreCreateBinary();
     s_frame_mutex = xSemaphoreCreateMutex();
+
+    ESP_ERROR_CHECK(buzzer_init());
+    buzzer_play_async(BUZZER_MELODY_BOOT);
 
     // Init NVS (required by BLE and WiFi)
     esp_err_t ret = nvs_flash_init();

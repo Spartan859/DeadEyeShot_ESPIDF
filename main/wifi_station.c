@@ -1,4 +1,5 @@
 #include "wifi_station.h"
+#include "buzzer.h"
 #include "esp_log.h"
 #include "esp_wifi.h"
 #include "esp_event.h"
@@ -149,7 +150,11 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
         ESP_LOGI(TAG, "WiFi connected! IP: " IPSTR, IP2STR(&event->ip_info.ip));
+        bool newly_connected = !s_connected;
         s_connected = true;
+        if (newly_connected) {
+            buzzer_play_async(BUZZER_MELODY_WIFI_CONNECTED);
+        }
         char status[64];
         snprintf(status, sizeof(status), "connected:" IPSTR, IP2STR(&event->ip_info.ip));
         set_status(status);
