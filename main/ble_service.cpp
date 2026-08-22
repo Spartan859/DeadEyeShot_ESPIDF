@@ -151,6 +151,22 @@ static void on_wifi_status_changed(const char *status)
     update_status(status);
 }
 
+class StatusCallbacks : public BLECharacteristicCallbacks {
+    void onRead(BLECharacteristic *characteristic) override {
+        const char *status = wifi_get_status_text();
+        characteristic->setValue((uint8_t *)status, strlen(status));
+    }
+
+#if defined(CONFIG_NIMBLE_ENABLED)
+    void onSubscribe(BLECharacteristic *characteristic, ble_gap_conn_desc *desc,
+                     uint16_t subValue) override {
+        if (subValue > 0) {
+            update_status(wifi_get_status_text());
+        }
+    }
+#endif
+};
+
 class ServerCallbacks : public BLEServerCallbacks {
     void onConnect(BLEServer *pServer) override {
         s_device_connected = true;
@@ -266,6 +282,7 @@ esp_err_t ble_service_init(void)
         CHAR_UUID_STATUS,
         BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY
     );
+    s_status_char->setCallbacks(new StatusCallbacks());
     s_status_char->addDescriptor(new BLE2902());
     update_status(wifi_get_status_text());
 
