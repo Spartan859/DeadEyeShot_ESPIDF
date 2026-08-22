@@ -10,7 +10,7 @@ dependencies:
       type: service
     version: 1.0.3
   espressif/arduino-esp32:
-    component_hash: 40614111c1f42f83585134d7105761fb95dd6cee38c0a66e1b572fe6212ffaa7
+    component_hash: e7e5006cc864a1b33907f7d3ec7af5f64acfae9f5a53bd8097cb80f0936c4c7c
     dependencies:
     - name: chmorgan/esp-libhelix-mp3
       registry_url: https://components.espressif.com
@@ -143,7 +143,7 @@ dependencies:
     - esp32p4
     - esp32s2
     - esp32s3
-    version: 3.3.8
+    version: 3.3.10
   espressif/cbor:
     component_hash: dad9ca860963e930366510a10b422b3125a4fb27b979712ed65efcbcd742de50
     dependencies:
@@ -502,6 +502,6 @@ dependencies:
 direct_dependencies:
 - espressif/arduino-esp32
 - espressif/esp32-camera
-manifest_hash: 7c7cf8ade074c1899bf94e3c5bff21750787d172b85a05036edfde35bf72df14
+manifest_hash: a7ece0ab9371fdbbc9da60301e99ea685b8e24d54b10fd077e1c3c257044296a
 target: esp32s3
 version: 2.0.0
