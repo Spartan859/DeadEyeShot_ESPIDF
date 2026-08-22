@@ -126,9 +126,10 @@ static void update_status(const char *status);
 
 static void notify_current_status_task(void *arg)
 {
-    vTaskDelay(pdMS_TO_TICKS(800));
-    if (s_device_connected) {
+    vTaskDelay(pdMS_TO_TICKS(700));
+    for (int attempt = 0; attempt < 6 && s_device_connected; ++attempt) {
         update_status(wifi_get_status_text());
+        vTaskDelay(pdMS_TO_TICKS(500));
     }
     s_status_notify_task = nullptr;
     vTaskDelete(nullptr);
