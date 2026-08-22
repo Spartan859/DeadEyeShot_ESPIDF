@@ -34,6 +34,7 @@ static std::string s_pending_ssid;
 static std::string s_pending_pass;
 static std::string s_device_name;
 static TaskHandle_t s_advertising_task = nullptr;
+static TaskHandle_t s_status_notify_task = nullptr;
 
 static void restart_advertising_task(void *arg)
 {
@@ -121,6 +122,18 @@ static void restart_after_name_change(void *arg)
     esp_restart();
 }
 
+static void update_status(const char *status);
+
+static void notify_current_status_task(void *arg)
+{
+    vTaskDelay(pdMS_TO_TICKS(800));
+    if (s_device_connected) {
+        update_status(wifi_get_status_text());
+    }
+    s_status_notify_task = nullptr;
+    vTaskDelete(nullptr);
+}
+
 static void update_status(const char *status)
 {
     if (!s_status_char) {
@@ -141,6 +154,10 @@ class ServerCallbacks : public BLEServerCallbacks {
     void onConnect(BLEServer *pServer) override {
         s_device_connected = true;
         update_status(wifi_get_status_text());
+        if (!s_status_notify_task) {
+            xTaskCreate(notify_current_status_task, "ble_status_notify", 2048,
+                        nullptr, 3, &s_status_notify_task);
+        }
         ESP_LOGI(TAG, "BLE provisioning client connected");
     }
 
