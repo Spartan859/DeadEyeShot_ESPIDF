@@ -3,6 +3,7 @@
 #include "esp_log.h"
 #include "BLEDevice.h"
 #include "BLEServer.h"
+#include "BLEAdvertising.h"
 #include "BLECharacteristic.h"
 #include "BLE2902.h"
 #include "esp_mac.h"
@@ -32,6 +33,26 @@ static bool s_device_connected = false;
 static std::string s_pending_ssid;
 static std::string s_pending_pass;
 static std::string s_device_name;
+
+static void restart_advertising_task(void *arg)
+{
+    BLEServer *server = static_cast<BLEServer *>(arg);
+    bool started = false;
+    for (int attempt = 1; attempt <= 5; ++attempt) {
+        vTaskDelay(pdMS_TO_TICKS(250));
+        BLEAdvertising *advertising = server ? server->getAdvertising() : nullptr;
+        if (advertising && advertising->start()) {
+            ESP_LOGI(TAG, "BLE advertising restarted after disconnect (attempt %d)", attempt);
+            started = true;
+            break;
+        }
+        ESP_LOGW(TAG, "BLE advertising restart failed (attempt %d)", attempt);
+    }
+    if (!started) {
+        ESP_LOGE(TAG, "BLE advertising could not be restarted after disconnect");
+    }
+    vTaskDelete(nullptr);
+}
 
 static std::string default_device_name(void)
 {
@@ -128,7 +149,8 @@ class ServerCallbacks : public BLEServerCallbacks {
 
     void onDisconnect(BLEServer *pServer) override {
         s_device_connected = false;
-        ESP_LOGI(TAG, "BLE provisioning client disconnected, advertising will restart");
+        ESP_LOGI(TAG, "BLE provisioning client disconnected, restarting advertising");
+        xTaskCreate(restart_advertising_task, "ble_adv_restart", 3072, pServer, 3, nullptr);
     }
 };
 
@@ -201,7 +223,6 @@ esp_err_t ble_service_init(void)
 
     s_server = BLEDevice::createServer();
     s_server->setCallbacks(new ServerCallbacks());
-    s_server->advertiseOnDisconnect(true);
 
     BLEService *service = s_server->createService(SERVICE_UUID);
 
