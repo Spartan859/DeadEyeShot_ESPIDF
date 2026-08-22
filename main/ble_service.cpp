@@ -3,11 +3,14 @@
 #include "esp_log.h"
 #include "BLEDevice.h"
 #include "BLEServer.h"
+#include "BLEAdvertising.h"
 #include "BLECharacteristic.h"
 #include "BLE2902.h"
 #include "esp_mac.h"
 #include "esp_system.h"
 #include "nvs.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include <string>
 #include <cstring>
 
@@ -30,6 +33,23 @@ static bool s_device_connected = false;
 static std::string s_pending_ssid;
 static std::string s_pending_pass;
 static std::string s_device_name;
+static TaskHandle_t s_advertising_task = nullptr;
+
+static void restart_advertising_task(void *arg)
+{
+    BLEServer *server = static_cast<BLEServer *>(arg);
+    vTaskDelay(pdMS_TO_TICKS(500));
+
+    BLEAdvertising *advertising = server ? server->getAdvertising() : nullptr;
+    bool stopped = advertising && advertising->stop();
+    vTaskDelay(pdMS_TO_TICKS(100));
+    bool started = advertising && advertising->start();
+    ESP_LOGI(TAG, "BLE advertising reset after disconnect: stop=%s start=%s",
+             stopped ? "ok" : "failed", started ? "requested" : "failed");
+
+    s_advertising_task = nullptr;
+    vTaskDelete(nullptr);
+}
 
 static std::string default_device_name(void)
 {
@@ -126,9 +146,11 @@ class ServerCallbacks : public BLEServerCallbacks {
 
     void onDisconnect(BLEServer *pServer) override {
         s_device_connected = false;
-        bool restarted = pServer && pServer->getAdvertising()->start();
-        ESP_LOGI(TAG, "BLE provisioning client disconnected, advertising restart %s",
-                 restarted ? "requested" : "failed");
+        ESP_LOGI(TAG, "BLE provisioning client disconnected, scheduling advertising reset");
+        if (!s_advertising_task) {
+            xTaskCreate(restart_advertising_task, "ble_adv_reset", 3072,
+                        pServer, 3, &s_advertising_task);
+        }
     }
 };
 
