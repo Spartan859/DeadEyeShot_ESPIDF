@@ -126,7 +126,9 @@ class ServerCallbacks : public BLEServerCallbacks {
 
     void onDisconnect(BLEServer *pServer) override {
         s_device_connected = false;
-        ESP_LOGI(TAG, "BLE provisioning client disconnected, advertising will restart");
+        bool restarted = pServer && pServer->getAdvertising()->start();
+        ESP_LOGI(TAG, "BLE provisioning client disconnected, advertising restart %s",
+                 restarted ? "requested" : "failed");
     }
 };
 
@@ -199,7 +201,6 @@ esp_err_t ble_service_init(void)
 
     s_server = BLEDevice::createServer();
     s_server->setCallbacks(new ServerCallbacks());
-    s_server->advertiseOnDisconnect(true);
 
     BLEService *service = s_server->createService(SERVICE_UUID);
 
